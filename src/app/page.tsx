@@ -3,27 +3,37 @@
 import { useState, useEffect, useCallback, useRef } from 'react'
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card'
 import { Button } from '@/components/ui/button'
-import { Input } from '@/components/ui/input'
 import { Badge } from '@/components/ui/badge'
-import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs'
 import { ScrollArea } from '@/components/ui/scroll-area'
 import { Separator } from '@/components/ui/separator'
 import { Dialog, DialogContent, DialogDescription, DialogHeader, DialogTitle, DialogTrigger } from '@/components/ui/dialog'
 import { Progress } from '@/components/ui/progress'
 import {
   Mail, Copy, RefreshCw, Trash2, Shield, Clock, Zap, Globe,
-  Eye, ArrowRight, AlertTriangle, Check, ExternalLink, Info,
-  KeyRound, Timer, UserX, FileText, Scale, ChevronDown, Loader2
+  Eye, AlertTriangle, Check, Scale, KeyRound, Timer, UserX,
+  FileText, Loader2
 } from 'lucide-react'
 
 interface EmailAccount {
   id: string
   address: string
+  password: string
+  token: string | null
   expiresAt: string
   remaining: number
 }
 
 interface EmailMessage {
+  id: string
+  fromAddress: string
+  fromName: string | null
+  subject: string
+  intro: string
+  isRead: boolean
+  receivedAt: string
+}
+
+interface FullMessage {
   id: string
   fromAddress: string
   fromName: string | null
@@ -37,7 +47,7 @@ interface EmailMessage {
 export default function Home() {
   const [account, setAccount] = useState<EmailAccount | null>(null)
   const [messages, setMessages] = useState<EmailMessage[]>([])
-  const [selectedMessage, setSelectedMessage] = useState<EmailMessage | null>(null)
+  const [selectedMessage, setSelectedMessage] = useState<FullMessage | null>(null)
   const [loading, setLoading] = useState(false)
   const [loadingInbox, setLoadingInbox] = useState(false)
   const [loadingMessage, setLoadingMessage] = useState(false)
@@ -47,6 +57,7 @@ export default function Home() {
   const [countdown, setCountdown] = useState(0)
   const [showRules, setShowRules] = useState(false)
   const [showMessage, setShowMessage] = useState(false)
+  const [expiryTimer, setExpiryTimer] = useState('')
   const refreshInterval = useRef<NodeJS.Timeout | null>(null)
   const countdownInterval = useRef<NodeJS.Timeout | null>(null)
 
@@ -60,7 +71,7 @@ export default function Home() {
     if (autoRefresh && account) {
       refreshInterval.current = setInterval(() => {
         fetchInbox()
-      }, 10000) // every 10 seconds
+      }, 10000)
       
       setCountdown(10)
       countdownInterval.current = setInterval(() => {
@@ -74,14 +85,31 @@ export default function Home() {
     }
   }, [autoRefresh, account])
 
+  // Expiry timer
+  useEffect(() => {
+    if (!account) return
+    const interval = setInterval(() => {
+      const expires = new Date(account.expiresAt)
+      const now = new Date()
+      const diff = expires.getTime() - now.getTime()
+      if (diff <= 0) {
+        setExpiryTimer('Expirado')
+        clearInterval(interval)
+      } else {
+        const minutes = Math.floor(diff / 60000)
+        const seconds = Math.floor((diff % 60000) / 1000)
+        setExpiryTimer(`${minutes}:${seconds.toString().padStart(2, '0')}`)
+      }
+    }, 1000)
+    return () => clearInterval(interval)
+  }, [account])
+
   const fetchUsage = async () => {
     try {
       const res = await fetch('/api/email/usage')
       if (res.ok) {
         const data = await res.json()
-        if (data.success) {
-          setRemaining(data.remaining)
-        }
+        if (data.success) setRemaining(data.remaining)
       }
     } catch {}
   }
@@ -111,7 +139,7 @@ export default function Home() {
     if (!account) return
     setLoadingInbox(true)
     try {
-      const res = await fetch(`/api/email/inbox?accountId=${account.id}`)
+      const res = await fetch(`/api/email/inbox?address=${encodeURIComponent(account.address)}&password=${encodeURIComponent(account.password)}`)
       const data = await res.json()
 
       if (data.success) {
@@ -124,15 +152,15 @@ export default function Home() {
   }, [account])
 
   const openMessage = async (messageId: string) => {
+    if (!account) return
     setLoadingMessage(true)
     try {
-      const res = await fetch(`/api/email/message?messageId=${messageId}`)
+      const res = await fetch(`/api/email/message?messageId=${messageId}&address=${encodeURIComponent(account.address)}&password=${encodeURIComponent(account.password)}`)
       const data = await res.json()
 
       if (data.success) {
         setSelectedMessage(data.message)
         setShowMessage(true)
-        // Mark as read locally
         setMessages(prev => prev.map(m => m.id === messageId ? { ...m, isRead: true } : m))
       }
     } catch {} finally {
@@ -142,8 +170,9 @@ export default function Home() {
 
   const deleteMessage = async (messageId: string, e: React.MouseEvent) => {
     e.stopPropagation()
+    if (!account) return
     try {
-      const res = await fetch(`/api/email/message?messageId=${messageId}`, { method: 'DELETE' })
+      const res = await fetch(`/api/email/message?messageId=${messageId}&address=${encodeURIComponent(account.address)}&password=${encodeURIComponent(account.password)}`, { method: 'DELETE' })
       if (res.ok) {
         setMessages(prev => prev.filter(m => m.id !== messageId))
         if (selectedMessage?.id === messageId) {
@@ -161,17 +190,6 @@ export default function Home() {
       setCopied(true)
       setTimeout(() => setCopied(false), 2000)
     } catch {}
-  }
-
-  const getExpirationTime = () => {
-    if (!account) return ''
-    const expires = new Date(account.expiresAt)
-    const now = new Date()
-    const diff = expires.getTime() - now.getTime()
-    if (diff <= 0) return 'Expirado'
-    const minutes = Math.floor(diff / 60000)
-    const seconds = Math.floor((diff % 60000) / 1000)
-    return `${minutes}:${seconds.toString().padStart(2, '0')}`
   }
 
   const usagePercentage = ((1000 - remaining) / 1000) * 100
@@ -418,7 +436,7 @@ export default function Home() {
                   <div className="flex items-center gap-2 shrink-0">
                     <Badge variant="outline" className="gap-1 text-xs">
                       <Clock className="w-3 h-3" />
-                      {getExpirationTime()}
+                      {expiryTimer}
                     </Badge>
                     <Badge variant="outline" className="gap-1 text-xs">
                       <Zap className="w-3 h-3" />
@@ -427,7 +445,7 @@ export default function Home() {
                   </div>
                 </div>
                 {copied && (
-                  <p className="text-xs text-green-500 mt-1">¡Dirección copiada al portapapeles!</p>
+                  <p className="text-xs text-green-500 mt-1">Dirección copiada al portapapeles!</p>
                 )}
               </CardContent>
             </Card>
@@ -519,6 +537,9 @@ export default function Home() {
                             <p className={`text-sm truncate ${!msg.isRead ? 'font-medium' : 'text-muted-foreground'}`}>
                               {msg.subject}
                             </p>
+                            {msg.intro && (
+                              <p className="text-xs text-muted-foreground truncate mt-0.5">{msg.intro}</p>
+                            )}
                           </div>
                           <Button
                             variant="ghost"
@@ -550,7 +571,7 @@ export default function Home() {
                     </span>
                   </DialogDescription>
                 </DialogHeader>
-                <div className="mt-4">
+                <div className="mt-4 overflow-y-auto max-h-[50vh]">
                   {loadingMessage ? (
                     <div className="flex items-center justify-center py-12">
                       <Loader2 className="w-6 h-6 animate-spin text-muted-foreground" />
@@ -589,7 +610,7 @@ export default function Home() {
       </main>
 
       {/* Footer */}
-      <footer className="border-t bg-background/80">
+      <footer className="border-t bg-background/80 mt-auto">
         <div className="max-w-5xl mx-auto px-4 py-4 text-center">
           <p className="text-xs text-muted-foreground">
             AgentMail v1.0 — Email temporal para agentes del mundo | 

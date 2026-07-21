@@ -1,6 +1,4 @@
 import { NextRequest, NextResponse } from 'next/server'
-import { db } from '@/lib/db'
-import { createTempAccount } from '@/lib/mailtm'
 import { checkRateLimit, logUsage } from '@/lib/supabase'
 import crypto from 'crypto'
 
@@ -22,34 +20,75 @@ export async function POST(request: NextRequest) {
       )
     }
 
-    const account = await createTempAccount()
-    if (!account) {
+    // Create temporary email account via mail.tm API
+    const domainsRes = await fetch('https://api.mail.tm/domains', {
+      headers: { 'Accept': 'application/json' },
+    })
+    
+    if (!domainsRes.ok) {
+      return NextResponse.json(
+        { error: 'Failed to get domains', message: 'No se pudieron obtener los dominios disponibles.' },
+        { status: 500 }
+      )
+    }
+
+    const domainsData = await domainsRes.json()
+    const domains = Array.isArray(domainsData) ? domainsData : (domainsData['hydra:member'] || [])
+    if (domains.length === 0) {
+      return NextResponse.json(
+        { error: 'No domains', message: 'No hay dominios disponibles para crear emails temporales.' },
+        { status: 500 }
+      )
+    }
+
+    const domain = domains[0].domain
+    const username = 'agent' + Math.random().toString(36).substring(2, 8)
+    const address = `${username}@${domain}`
+    const password = Math.random().toString(36).substring(2, 14) + 'A1!'
+
+    const createRes = await fetch('https://api.mail.tm/accounts', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json', 'Accept': 'application/json' },
+      body: JSON.stringify({ address, password }),
+    })
+
+    if (!createRes.ok) {
+      const errText = await createRes.text()
+      console.error('Account creation failed:', createRes.status, errText)
       return NextResponse.json(
         { error: 'Failed to create email account', message: 'No se pudo crear la cuenta de email temporal. Inténtalo de nuevo.' },
         { status: 500 }
       )
     }
 
-    const expiresAt = new Date()
-    expiresAt.setMinutes(expiresAt.getMinutes() + 10)
+    const account = await createRes.json()
 
-    const emailAccount = await db.emailAccount.create({
-      data: {
-        emailAddress: account.address,
-        password: account.password,
-        mailTmId: account.id,
-        expiresAt,
-      },
+    // Get auth token
+    const tokenRes = await fetch('https://api.mail.tm/token', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ address, password }),
     })
 
+    let token = null
+    if (tokenRes.ok) {
+      const tokenData = await tokenRes.json()
+      token = tokenData.token
+    }
+
     await logUsage(sessionHash, 'generate_email')
+
+    const expiresAt = new Date()
+    expiresAt.setMinutes(expiresAt.getMinutes() + 10)
 
     return NextResponse.json({
       success: true,
       account: {
-        id: emailAccount.id,
-        address: emailAccount.emailAddress,
-        expiresAt: emailAccount.expiresAt,
+        id: account.id,
+        address,
+        password,
+        token,
+        expiresAt,
         remaining: rateCheck.remaining - 1,
       },
     })
