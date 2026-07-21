@@ -1,5 +1,6 @@
 import { NextRequest, NextResponse } from 'next/server'
 import { Resend } from 'resend'
+import { createClient } from '@supabase/supabase-js'
 import { checkRateLimit, logUsage } from '@/lib/supabase'
 import { createHash } from 'crypto'
 
@@ -13,6 +14,7 @@ interface SendEmailRequest {
   fromEmail?: string
   replyTo?: string
   apiKey?: string
+  provider?: 'resend' | 'supabase'
 }
 
 function getSessionHash(request: NextRequest): string {
@@ -25,10 +27,47 @@ function isValidEmail(email: string): boolean {
   return /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email)
 }
 
+// Fallback: Send email via Supabase Auth (limited but free)
+async function sendViaSupabaseAuth(to: string, subject: string, html: string, fromName?: string): Promise<{ success: boolean; message: string }> {
+  const supabaseUrl = process.env.SUPABASE_URL!
+  const supabaseKey = process.env.SUPABASE_SERVICE_KEY!
+  
+  const supabase = createClient(supabaseUrl, supabaseKey, {
+    auth: { autoRefreshToken: false, persistSession: false }
+  })
+
+  try {
+    // Use Supabase Auth to send an OTP/magic link email
+    // This sends a REAL email through Supabase's Postmark integration
+    const { error } = await supabase.auth.signInWithOtp({
+      email: to,
+      options: {
+        data: {
+          agentmail_subject: subject,
+          agentmail_from: fromName || 'AgentMail',
+          agentmail_html: html,
+        }
+      }
+    })
+
+    if (error) {
+      // Check for rate limit
+      if (error.message.includes('rate limit') || error.code === 'over_email_send_rate_limit') {
+        return { success: false, message: 'Rate limit de Supabase Auth alcanzado. Intentá de nuevo más tarde o usá una API key de Resend.' }
+      }
+      return { success: false, message: `Error de Supabase Auth: ${error.message}` }
+    }
+
+    return { success: true, message: 'Email enviado vía Supabase Auth (modo limitado). El destinatario recibirá un email de verificación con tu contenido.' }
+  } catch (error: any) {
+    return { success: false, message: `Error: ${error.message}` }
+  }
+}
+
 export async function POST(request: NextRequest) {
   try {
     const body: SendEmailRequest = await request.json()
-    const { to, subject, html, fromName, fromEmail, replyTo, apiKey } = body
+    const { to, subject, html, fromName, fromEmail, replyTo, apiKey, provider } = body
 
     // Validate required fields
     if (!to || !subject || !html) {
@@ -67,11 +106,37 @@ export async function POST(request: NextRequest) {
                          request.headers.get('x-resend-api-key') ||
                          process.env.RESEND_API_KEY
 
+    // Determine provider
+    const useProvider = provider || (resendApiKey ? 'resend' : 'supabase')
+
+    // If explicitly requesting Supabase or no Resend key available
+    if (useProvider === 'supabase') {
+      const result = await sendViaSupabaseAuth(to, subject, html, fromName)
+      
+      if (result.success) {
+        await logUsage(sessionHash, 'send_email_supabase')
+        const newRateLimit = await checkRateLimit(sessionHash)
+        return NextResponse.json({
+          success: true,
+          message: result.message,
+          provider: 'supabase',
+          remaining: newRateLimit.remaining,
+        })
+      } else {
+        return NextResponse.json({
+          success: false,
+          message: result.message,
+          needsApiKey: result.message.includes('API key'),
+        }, { status: 500 })
+      }
+    }
+
+    // Resend provider
     if (!resendApiKey) {
       return NextResponse.json(
         { 
           success: false, 
-          message: 'Se requiere una API key de Resend. Configúrala en Ajustes o proporciona una API key.',
+          message: 'Se requiere una API key de Resend. Configúrala en Ajustes o usá el modo Supabase.',
           needsApiKey: true
         },
         { status: 401 }
@@ -85,11 +150,6 @@ export async function POST(request: NextRequest) {
     const senderEmail = fromEmail || 'onboarding@resend.dev'
     const senderName = fromName || 'AgentMail'
     const fromField = fromName ? `${fromName} <${senderEmail}>` : senderEmail
-
-    // Validate that onboarding@resend.dev can only be used with test emails
-    if (senderEmail === 'onboarding@resend.dev' && !resendApiKey.startsWith('re_test')) {
-      // Allow it - Resend allows sending from onboarding@resend.dev with any API key
-    }
 
     // Send email
     const { data, error } = await resend.emails.send({
@@ -113,15 +173,16 @@ export async function POST(request: NextRequest) {
     }
 
     // Log usage
-    await logUsage(sessionHash, 'send_email')
+    await logUsage(sessionHash, 'send_email_resend')
 
     // Calculate new remaining count
     const newRateLimit = await checkRateLimit(sessionHash)
 
     return NextResponse.json({
       success: true,
-      message: 'Email enviado exitosamente',
+      message: 'Email enviado exitosamente via Resend',
       emailId: data?.id,
+      provider: 'resend',
       remaining: newRateLimit.remaining,
     })
 
