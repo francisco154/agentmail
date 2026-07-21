@@ -1,7 +1,7 @@
 'use client'
 
 import { useState, useEffect, useCallback, useRef } from 'react'
-import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card'
+import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card'
 import { Button } from '@/components/ui/button'
 import { Badge } from '@/components/ui/badge'
 import { ScrollArea } from '@/components/ui/scroll-area'
@@ -17,8 +17,10 @@ import {
 interface EmailAccount {
   id: string
   address: string
-  password: string
-  token: string | null
+  password?: string
+  token?: string | null
+  sidToken?: string
+  seq?: number
   expiresAt: string
   remaining: number
 }
@@ -31,6 +33,7 @@ interface EmailMessage {
   intro: string
   isRead: boolean
   receivedAt: string
+  provider?: string
 }
 
 interface FullMessage {
@@ -46,6 +49,7 @@ interface FullMessage {
 
 export default function Home() {
   const [account, setAccount] = useState<EmailAccount | null>(null)
+  const [provider, setProvider] = useState<string>('guerrillamail')
   const [messages, setMessages] = useState<EmailMessage[]>([])
   const [selectedMessage, setSelectedMessage] = useState<FullMessage | null>(null)
   const [loading, setLoading] = useState(false)
@@ -61,31 +65,22 @@ export default function Home() {
   const refreshInterval = useRef<NodeJS.Timeout | null>(null)
   const countdownInterval = useRef<NodeJS.Timeout | null>(null)
 
-  // Fetch usage on mount
-  useEffect(() => {
-    fetchUsage()
-  }, [])
+  useEffect(() => { fetchUsage() }, [])
 
-  // Auto-refresh logic
   useEffect(() => {
     if (autoRefresh && account) {
-      refreshInterval.current = setInterval(() => {
-        fetchInbox()
-      }, 10000)
-      
+      refreshInterval.current = setInterval(() => { fetchInbox() }, 10000)
       setCountdown(10)
       countdownInterval.current = setInterval(() => {
         setCountdown(prev => prev <= 0 ? 10 : prev - 1)
       }, 1000)
     }
-
     return () => {
       if (refreshInterval.current) clearInterval(refreshInterval.current)
       if (countdownInterval.current) clearInterval(countdownInterval.current)
     }
   }, [autoRefresh, account])
 
-  // Expiry timer
   useEffect(() => {
     if (!account) return
     const interval = setInterval(() => {
@@ -122,6 +117,7 @@ export default function Home() {
 
       if (res.ok && data.success) {
         setAccount(data.account)
+        setProvider(data.provider || 'guerrillamail')
         setMessages([])
         setSelectedMessage(null)
         setRemaining(data.account.remaining)
@@ -139,23 +135,44 @@ export default function Home() {
     if (!account) return
     setLoadingInbox(true)
     try {
-      const res = await fetch(`/api/email/inbox?address=${encodeURIComponent(account.address)}&password=${encodeURIComponent(account.password)}`)
+      const params = new URLSearchParams({
+        provider,
+        address: account.address,
+        ...(provider === 'guerrillamail' 
+          ? { sidToken: account.sidToken || account.id, seq: String(account.seq || 0) }
+          : { password: account.password || '' }
+        ),
+      })
+      const res = await fetch(`/api/email/inbox?${params}`)
       const data = await res.json()
 
       if (data.success) {
         setMessages(data.messages)
         if (data.remaining !== undefined) setRemaining(data.remaining)
+        // Update seq for guerrillamail
+        if (provider === 'guerrillamail' && data.messages.length > 0) {
+          // Keep seq updated for next check
+        }
       }
     } catch {} finally {
       setLoadingInbox(false)
     }
-  }, [account])
+  }, [account, provider])
 
   const openMessage = async (messageId: string) => {
     if (!account) return
     setLoadingMessage(true)
     try {
-      const res = await fetch(`/api/email/message?messageId=${messageId}&address=${encodeURIComponent(account.address)}&password=${encodeURIComponent(account.password)}`)
+      const params = new URLSearchParams({
+        messageId,
+        provider,
+        address: account.address,
+        ...(provider === 'guerrillamail'
+          ? { sidToken: account.sidToken || account.id }
+          : { password: account.password || '' }
+        ),
+      })
+      const res = await fetch(`/api/email/message?${params}`)
       const data = await res.json()
 
       if (data.success) {
@@ -172,7 +189,15 @@ export default function Home() {
     e.stopPropagation()
     if (!account) return
     try {
-      const res = await fetch(`/api/email/message?messageId=${messageId}&address=${encodeURIComponent(account.address)}&password=${encodeURIComponent(account.password)}`, { method: 'DELETE' })
+      const params = new URLSearchParams({
+        messageId,
+        provider,
+        ...(provider === 'guerrillamail'
+          ? { sidToken: account.sidToken || account.id }
+          : {}
+        ),
+      })
+      const res = await fetch(`/api/email/message?${params}`, { method: 'DELETE' })
       if (res.ok) {
         setMessages(prev => prev.filter(m => m.id !== messageId))
         if (selectedMessage?.id === messageId) {
@@ -226,9 +251,7 @@ export default function Home() {
                     <Scale className="w-5 h-5" />
                     Reglas y Condiciones de Uso
                   </DialogTitle>
-                  <DialogDescription>
-                    Al usar AgentMail, aceptás estas condiciones
-                  </DialogDescription>
+                  <DialogDescription>Al usar AgentMail, aceptás estas condiciones</DialogDescription>
                 </DialogHeader>
                 <div className="space-y-4 text-sm">
                   <div className="space-y-2">
@@ -243,12 +266,12 @@ export default function Home() {
                   <Separator />
                   <div className="space-y-2">
                     <h3 className="font-semibold flex items-center gap-2"><Clock className="w-4 h-4 text-blue-500" />3. Naturaleza Temporal</h3>
-                    <p className="text-muted-foreground">Las cuentas de email generadas son <strong>temporales y se eliminan automáticamente</strong>. Los mensajes recibidos no se almacenan permanentemente. Una vez que la cuenta expira, toda la información asociada se pierde y no puede ser recuperada. No nos hacemos responsables por la pérdida de información.</p>
+                    <p className="text-muted-foreground">Las cuentas de email generadas son <strong>temporales y se eliminan automáticamente</strong>. Los mensajes recibidos no se almacenan permanentemente. Una vez que la cuenta expira, toda la información asociada se pierde y no puede ser recuperada.</p>
                   </div>
                   <Separator />
                   <div className="space-y-2">
                     <h3 className="font-semibold flex items-center gap-2"><UserX className="w-4 h-4 text-purple-500" />4. Privacidad y Anonimato</h3>
-                    <p className="text-muted-foreground">No recopilamos información personal identificable. El seguimiento de uso se basa en hashes anónimos de sesión, no en datos personales. No almacenamos contraseñas de las cuentas temporales después de la sesión. No compartimos datos con terceros bajo ninguna circunstancia.</p>
+                    <p className="text-muted-foreground">No recopilamos información personal identificable. El seguimiento de uso se basa en hashes anónimos de sesión. No compartimos datos con terceros bajo ninguna circunstancia.</p>
                   </div>
                   <Separator />
                   <div className="space-y-2">
@@ -264,19 +287,18 @@ export default function Home() {
                   </div>
                   <Separator />
                   <div className="space-y-2">
-                    <h3 className="font-semibold flex items-center gap-2"><FileText className="w-4 h-4 text-teal-500" />6. Disponibilidad del Servicio</h3>
-                    <p className="text-muted-foreground">AgentMail se proporciona &quot;tal cual&quot; sin garantías de disponibilidad continua. Podemos suspender, modificar o descontinuar el servicio en cualquier momento sin previo aviso. No garantizamos la entrega de emails ni la compatibilidad con todos los remitentes.</p>
+                    <h3 className="font-semibold flex items-center gap-2"><FileText className="w-4 h-4 text-teal-500" />6. Disponibilidad</h3>
+                    <p className="text-muted-foreground">AgentMail se proporciona &quot;tal cual&quot; sin garantías de disponibilidad continua. Usamos múltiples proveedores (Guerrilla Mail + mail.tm) para maximizar la disponibilidad.</p>
                   </div>
                   <Separator />
                   <div className="space-y-2">
                     <h3 className="font-semibold flex items-center gap-2"><Globe className="w-4 h-4 text-cyan-500" />7. Jurisdicción</h3>
-                    <p className="text-muted-foreground">Este servicio opera en la nube (Vercel + Supabase) y está diseñado para agentes de todo el mundo. El uso del servicio desde jurisdicciones donde los emails temporales estén prohibidos es responsabilidad exclusiva del usuario. Al usar AgentMail, el usuario acepta cumplir con las leyes locales aplicables.</p>
+                    <p className="text-muted-foreground">Este servicio opera en la nube (Vercel + Supabase) y está diseñado para agentes de todo el mundo. El uso del servicio desde jurisdicciones donde los emails temporales estén prohibidos es responsabilidad exclusiva del usuario.</p>
                   </div>
-                  <Separator />
                   <div className="bg-muted/50 p-3 rounded-lg">
                     <p className="text-xs text-muted-foreground text-center">
                       AgentMail v1.0 — Servicio de email temporal para agentes del mundo<br/>
-                      Desarrollado con Next.js, Supabase y mail.tm | Desplegado en Vercel<br/>
+                      Multi-provider (Guerrilla Mail + mail.tm) | Vercel + Supabase<br/>
                       Sin dependencia de VPS — 100% en la nube
                     </p>
                   </div>
@@ -287,12 +309,9 @@ export default function Home() {
         </div>
       </header>
 
-      {/* Main Content */}
       <main className="flex-1 max-w-5xl mx-auto px-4 py-6 w-full">
         {!account ? (
-          /* Landing / Generate Email */
           <div className="space-y-8">
-            {/* Hero Section */}
             <div className="text-center space-y-4 py-8">
               <div className="w-20 h-20 rounded-2xl bg-primary/10 flex items-center justify-center mx-auto mb-4">
                 <Mail className="w-10 h-10 text-primary" />
@@ -304,7 +323,6 @@ export default function Home() {
               </p>
             </div>
 
-            {/* Features */}
             <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
               <Card>
                 <CardHeader className="pb-2">
@@ -330,12 +348,11 @@ export default function Home() {
                   <CardTitle className="text-base">100% Nube</CardTitle>
                 </CardHeader>
                 <CardContent>
-                  <p className="text-sm text-muted-foreground">Desplegado en Vercel + Supabase. Sin VPS, sin servidores que mantener. Disponible desde cualquier lugar del mundo.</p>
+                  <p className="text-sm text-muted-foreground">Desplegado en Vercel + Supabase. Sin VPS, sin servidores. Multi-provider para máxima disponibilidad.</p>
                 </CardContent>
               </Card>
             </div>
 
-            {/* Usage Bar */}
             <Card className="border-dashed">
               <CardContent className="pt-6">
                 <div className="flex items-center justify-between mb-2">
@@ -347,19 +364,9 @@ export default function Home() {
               </CardContent>
             </Card>
 
-            {/* Generate Button */}
             <div className="flex justify-center">
-              <Button 
-                size="lg" 
-                className="gap-2 px-8 text-base"
-                onClick={generateEmail}
-                disabled={loading || remaining <= 0}
-              >
-                {loading ? (
-                  <Loader2 className="w-5 h-5 animate-spin" />
-                ) : (
-                  <KeyRound className="w-5 h-5" />
-                )}
+              <Button size="lg" className="gap-2 px-8 text-base" onClick={generateEmail} disabled={loading || remaining <= 0}>
+                {loading ? <Loader2 className="w-5 h-5 animate-spin" /> : <KeyRound className="w-5 h-5" />}
                 {loading ? 'Generando...' : 'Generar Email Temporal'}
               </Button>
             </div>
@@ -368,54 +375,34 @@ export default function Home() {
               <div className="text-center">
                 <Badge variant="destructive" className="gap-1">
                   <AlertTriangle className="w-3 h-3" />
-                  Límite de uso alcanzado. Esperá a que se reinicie tu cuota.
+                  Límite de uso alcanzado.
                 </Badge>
               </div>
             )}
 
-            {/* How it works */}
             <Card>
               <CardHeader>
                 <CardTitle className="text-lg">¿Cómo funciona?</CardTitle>
               </CardHeader>
               <CardContent>
-                <div className="grid grid-cols-1 md:grid-cols-4 gap-4">
-                  <div className="text-center space-y-2">
-                    <div className="w-10 h-10 rounded-full bg-primary/10 flex items-center justify-center mx-auto">
-                      <span className="text-sm font-bold text-primary">1</span>
+                <div className="grid grid-cols-2 md:grid-cols-4 gap-4">
+                  {['Generá', 'Copiá', 'Recibí', 'Leé'].map((step, i) => (
+                    <div key={i} className="text-center space-y-2">
+                      <div className="w-10 h-10 rounded-full bg-primary/10 flex items-center justify-center mx-auto">
+                        <span className="text-sm font-bold text-primary">{i + 1}</span>
+                      </div>
+                      <p className="text-sm font-medium">{step}</p>
+                      <p className="text-xs text-muted-foreground">
+                        {['Hacé clic para crear tu email', 'Copiá la dirección', 'Los correos llegan a tu bandeja', 'Leé el contenido y expira'][i]}
+                      </p>
                     </div>
-                    <p className="text-sm font-medium">Generá</p>
-                    <p className="text-xs text-muted-foreground">Hacé clic en el botón para crear tu email temporal</p>
-                  </div>
-                  <div className="text-center space-y-2">
-                    <div className="w-10 h-10 rounded-full bg-primary/10 flex items-center justify-center mx-auto">
-                      <span className="text-sm font-bold text-primary">2</span>
-                    </div>
-                    <p className="text-sm font-medium">Copiá</p>
-                    <p className="text-xs text-muted-foreground">Copiá la dirección y usala donde necesites</p>
-                  </div>
-                  <div className="text-center space-y-2">
-                    <div className="w-10 h-10 rounded-full bg-primary/10 flex items-center justify-center mx-auto">
-                      <span className="text-sm font-bold text-primary">3</span>
-                    </div>
-                    <p className="text-sm font-medium">Recibí</p>
-                    <p className="text-xs text-muted-foreground">Los correos llegan a tu bandeja temporal</p>
-                  </div>
-                  <div className="text-center space-y-2">
-                    <div className="w-10 h-10 rounded-full bg-primary/10 flex items-center justify-center mx-auto">
-                      <span className="text-sm font-bold text-primary">4</span>
-                    </div>
-                    <p className="text-sm font-medium">Leé</p>
-                    <p className="text-xs text-muted-foreground">Leé el contenido y la cuenta expira sola</p>
-                  </div>
+                  ))}
                 </div>
               </CardContent>
             </Card>
           </div>
         ) : (
-          /* Inbox View */
           <div className="space-y-4">
-            {/* Email Address Card */}
             <Card className="border-primary/30 bg-primary/5">
               <CardContent className="pt-6">
                 <div className="flex flex-col sm:flex-row items-start sm:items-center gap-3">
@@ -423,12 +410,7 @@ export default function Home() {
                     <p className="text-xs text-muted-foreground mb-1">Tu email temporal</p>
                     <div className="flex items-center gap-2">
                       <code className="text-lg font-mono font-semibold break-all">{account.address}</code>
-                      <Button
-                        variant="ghost"
-                        size="sm"
-                        className="shrink-0"
-                        onClick={copyAddress}
-                      >
+                      <Button variant="ghost" size="sm" className="shrink-0" onClick={copyAddress}>
                         {copied ? <Check className="w-4 h-4 text-green-500" /> : <Copy className="w-4 h-4" />}
                       </Button>
                     </div>
@@ -442,55 +424,36 @@ export default function Home() {
                       <Zap className="w-3 h-3" />
                       {remaining}
                     </Badge>
+                    <Badge variant="secondary" className="text-xs">
+                      {provider === 'guerrillamail' ? 'Guerrilla' : 'mail.tm'}
+                    </Badge>
                   </div>
                 </div>
-                {copied && (
-                  <p className="text-xs text-green-500 mt-1">Dirección copiada al portapapeles!</p>
-                )}
+                {copied && <p className="text-xs text-green-500 mt-1">Dirección copiada al portapapeles!</p>}
               </CardContent>
             </Card>
 
-            {/* Action Buttons */}
             <div className="flex flex-wrap gap-2">
-              <Button 
-                onClick={fetchInbox} 
-                disabled={loadingInbox}
-                size="sm"
-                className="gap-1"
-              >
+              <Button onClick={fetchInbox} disabled={loadingInbox} size="sm" className="gap-1">
                 {loadingInbox ? <Loader2 className="w-4 h-4 animate-spin" /> : <RefreshCw className="w-4 h-4" />}
                 {loadingInbox ? 'Cargando...' : 'Refrescar Bandeja'}
               </Button>
-              <Button
-                variant={autoRefresh ? 'default' : 'outline'}
-                size="sm"
-                className="gap-1"
-                onClick={() => setAutoRefresh(!autoRefresh)}
-              >
+              <Button variant={autoRefresh ? 'default' : 'outline'} size="sm" className="gap-1" onClick={() => setAutoRefresh(!autoRefresh)}>
                 <Timer className="w-4 h-4" />
                 {autoRefresh ? `Auto (${countdown}s)` : 'Auto-Refresh'}
               </Button>
-              <Button
-                variant="outline"
-                size="sm"
-                className="gap-1"
-                onClick={generateEmail}
-                disabled={loading}
-              >
+              <Button variant="outline" size="sm" className="gap-1" onClick={generateEmail} disabled={loading}>
                 <KeyRound className="w-4 h-4" />
                 Nuevo Email
               </Button>
             </div>
 
-            {/* Messages List */}
             <Card>
               <CardHeader className="pb-2">
                 <CardTitle className="text-base flex items-center gap-2">
                   <Mail className="w-4 h-4" />
                   Bandeja de Entrada
-                  {messages.length > 0 && (
-                    <Badge variant="secondary" className="ml-auto">{messages.length}</Badge>
-                  )}
+                  {messages.length > 0 && <Badge variant="secondary" className="ml-auto">{messages.length}</Badge>}
                 </CardTitle>
               </CardHeader>
               <CardContent>
@@ -501,52 +464,30 @@ export default function Home() {
                     </div>
                     <p className="text-muted-foreground">No hay mensajes todavía</p>
                     <p className="text-xs text-muted-foreground">
-                      Usá esta dirección para recibir correos. Los mensajes aparecerán aquí automáticamente.
+                      Usá esta dirección para recibir correos. Los mensajes aparecerán aquí.
                     </p>
-                    {autoRefresh && (
-                      <p className="text-xs text-primary">
-                        Auto-refresh activado — revisando cada 10 segundos
-                      </p>
-                    )}
+                    {autoRefresh && <p className="text-xs text-primary">Auto-refresh activado — cada 10s</p>}
                   </div>
                 ) : (
                   <ScrollArea className="max-h-96">
                     <div className="space-y-1">
                       {messages.map((msg) => (
-                        <div
-                          key={msg.id}
-                          onClick={() => openMessage(msg.id)}
-                          className={`flex items-start gap-3 p-3 rounded-lg cursor-pointer hover:bg-muted/50 transition-colors group ${
-                            !msg.isRead ? 'bg-primary/5 border-l-2 border-primary' : ''
-                          }`}
-                        >
-                          <div className={`w-8 h-8 rounded-full flex items-center justify-center shrink-0 ${
-                            !msg.isRead ? 'bg-primary text-primary-foreground' : 'bg-muted text-muted-foreground'
-                          }`}>
+                        <div key={msg.id} onClick={() => openMessage(msg.id)}
+                          className={`flex items-start gap-3 p-3 rounded-lg cursor-pointer hover:bg-muted/50 transition-colors group ${!msg.isRead ? 'bg-primary/5 border-l-2 border-primary' : ''}`}>
+                          <div className={`w-8 h-8 rounded-full flex items-center justify-center shrink-0 ${!msg.isRead ? 'bg-primary text-primary-foreground' : 'bg-muted text-muted-foreground'}`}>
                             <Mail className="w-4 h-4" />
                           </div>
                           <div className="flex-1 min-w-0">
                             <div className="flex items-center gap-2">
-                              <p className={`text-sm truncate ${!msg.isRead ? 'font-semibold' : 'font-medium'}`}>
-                                {msg.fromName || msg.fromAddress}
-                              </p>
+                              <p className={`text-sm truncate ${!msg.isRead ? 'font-semibold' : 'font-medium'}`}>{msg.fromName || msg.fromAddress}</p>
                               <span className="text-xs text-muted-foreground shrink-0">
                                 {new Date(msg.receivedAt).toLocaleTimeString('es', { hour: '2-digit', minute: '2-digit' })}
                               </span>
                             </div>
-                            <p className={`text-sm truncate ${!msg.isRead ? 'font-medium' : 'text-muted-foreground'}`}>
-                              {msg.subject}
-                            </p>
-                            {msg.intro && (
-                              <p className="text-xs text-muted-foreground truncate mt-0.5">{msg.intro}</p>
-                            )}
+                            <p className={`text-sm truncate ${!msg.isRead ? 'font-medium' : 'text-muted-foreground'}`}>{msg.subject}</p>
+                            {msg.intro && <p className="text-xs text-muted-foreground truncate mt-0.5">{msg.intro}</p>}
                           </div>
-                          <Button
-                            variant="ghost"
-                            size="sm"
-                            className="opacity-0 group-hover:opacity-100 shrink-0"
-                            onClick={(e) => deleteMessage(msg.id, e)}
-                          >
+                          <Button variant="ghost" size="sm" className="opacity-0 group-hover:opacity-100 shrink-0" onClick={(e) => deleteMessage(msg.id, e)}>
                             <Trash2 className="w-4 h-4 text-destructive" />
                           </Button>
                         </div>
@@ -557,45 +498,28 @@ export default function Home() {
               </CardContent>
             </Card>
 
-            {/* Message Viewer Dialog */}
             <Dialog open={showMessage} onOpenChange={setShowMessage}>
               <DialogContent className="max-w-2xl max-h-[80vh]">
                 <DialogHeader>
-                  <DialogTitle className="text-base">
-                    {selectedMessage?.subject || 'Sin asunto'}
-                  </DialogTitle>
-                  <DialogDescription className="flex items-center gap-2">
-                    <span>De: {selectedMessage?.fromName || selectedMessage?.fromAddress}</span>
-                    <span className="text-xs">
-                      {selectedMessage && new Date(selectedMessage.receivedAt).toLocaleString('es')}
-                    </span>
+                  <DialogTitle className="text-base">{selectedMessage?.subject || 'Sin asunto'}</DialogTitle>
+                  <DialogDescription>
+                    De: {selectedMessage?.fromName || selectedMessage?.fromAddress} — {selectedMessage && new Date(selectedMessage.receivedAt).toLocaleString('es')}
                   </DialogDescription>
                 </DialogHeader>
                 <div className="mt-4 overflow-y-auto max-h-[50vh]">
                   {loadingMessage ? (
-                    <div className="flex items-center justify-center py-12">
-                      <Loader2 className="w-6 h-6 animate-spin text-muted-foreground" />
-                    </div>
+                    <div className="flex items-center justify-center py-12"><Loader2 className="w-6 h-6 animate-spin text-muted-foreground" /></div>
                   ) : selectedMessage?.bodyHtml ? (
-                    <div 
-                      className="prose prose-sm max-w-none text-sm"
-                      dangerouslySetInnerHTML={{ __html: selectedMessage.bodyHtml }}
-                    />
+                    <div className="prose prose-sm max-w-none text-sm" dangerouslySetInnerHTML={{ __html: selectedMessage.bodyHtml }} />
                   ) : selectedMessage?.bodyText ? (
-                    <pre className="whitespace-pre-wrap text-sm font-mono bg-muted/50 p-4 rounded-lg overflow-auto">
-                      {selectedMessage.bodyText}
-                    </pre>
+                    <pre className="whitespace-pre-wrap text-sm font-mono bg-muted/50 p-4 rounded-lg overflow-auto">{selectedMessage.bodyText}</pre>
                   ) : (
-                    <div className="text-center py-8 text-muted-foreground">
-                      <Eye className="w-8 h-8 mx-auto mb-2" />
-                      <p>No se pudo cargar el contenido del mensaje</p>
-                    </div>
+                    <div className="text-center py-8 text-muted-foreground"><Eye className="w-8 h-8 mx-auto mb-2" /><p>No se pudo cargar el contenido</p></div>
                   )}
                 </div>
               </DialogContent>
             </Dialog>
 
-            {/* Usage Progress */}
             <Card className="border-dashed">
               <CardContent className="pt-4 pb-4">
                 <div className="flex items-center justify-between mb-1">
@@ -609,13 +533,10 @@ export default function Home() {
         )}
       </main>
 
-      {/* Footer */}
       <footer className="border-t bg-background/80 mt-auto">
         <div className="max-w-5xl mx-auto px-4 py-4 text-center">
           <p className="text-xs text-muted-foreground">
-            AgentMail v1.0 — Email temporal para agentes del mundo | 
-            Next.js + Supabase + mail.tm | 100% Nube (Vercel) | 
-            Límite: 1000 acciones / 16 días
+            AgentMail v1.0 — Email temporal para agentes del mundo | Multi-provider (Guerrilla Mail + mail.tm) | 100% Nube (Vercel) | Límite: 1000 acciones / 16 días
           </p>
         </div>
       </footer>
