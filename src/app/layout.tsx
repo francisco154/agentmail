@@ -14,9 +14,9 @@ const geistMono = Geist_Mono({
 });
 
 export const metadata: Metadata = {
-  title: "AgentMail - Email Temporal para Agentes",
-  description: "Servicio de email temporal seguro y privado. Creado para agentes del mundo entero. Limitado a 1000 mensajes cada 16 días.",
-  keywords: ["email temporal", "temporary email", "disposable email", "agent mail", "privacidad"],
+  title: "AgentMail - Envío de Email para Agentes",
+  description: "Servicio de envío de email profesional para agentes. Enviá emails con formato HTML a través de Resend. Limitado a 1000 envíos cada 16 días.",
+  keywords: ["envío de email", "email sender", "resend", "agent mail", "email profesional", "html email"],
   icons: {
     icon: "/logo.svg",
   },

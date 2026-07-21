@@ -131,7 +131,7 @@ export default function Home() {
     <p style="color: #3b82f6; font-weight: 600;">KDSotware</p>
   </div>
   <div style="text-align: center; padding: 16px; color: #94a3b8; font-size: 12px;">
-    <p>Este correo fue enviado a través de AgentMail - Email Temporal para Agentes</p>
+    <p>Este correo fue enviado a través de AgentMail - Envío de Email para Agentes</p>
   </div>
 </div>`)
         break
@@ -169,7 +169,7 @@ export default function Home() {
             </div>
             <div>
               <h1 className="text-lg font-bold tracking-tight">AgentMail</h1>
-              <p className="text-[10px] text-muted-foreground -mt-0.5">Email Temporal para Agentes</p>
+              <p className="text-[10px] text-muted-foreground -mt-0.5">Envío de Email para Agentes</p>
             </div>
           </div>
           <div className="flex items-center gap-2">
