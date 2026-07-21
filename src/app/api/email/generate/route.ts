@@ -21,23 +21,46 @@ export async function POST(request: NextRequest) {
     }
 
     // Create temporary email account via mail.tm API
-    const domainsRes = await fetch('https://api.mail.tm/domains', {
-      headers: { 'Accept': 'application/json' },
-    })
+    let domainsRes
+    try {
+      domainsRes = await fetch('https://api.mail.tm/domains', {
+        headers: { 'Accept': 'application/json' },
+        signal: AbortSignal.timeout(10000),
+      })
+    } catch (fetchErr: any) {
+      console.error('Domains fetch error:', fetchErr.message)
+      return NextResponse.json(
+        { error: 'Domains fetch failed', message: `Error al conectar con mail.tm: ${fetchErr.message}` },
+        { status: 503 }
+      )
+    }
     
     if (!domainsRes.ok) {
+      const errStatus = domainsRes.status
+      const errText = await domainsRes.text().catch(() => 'no body')
+      console.error('Domains response error:', errStatus, errText)
       return NextResponse.json(
-        { error: 'Failed to get domains', message: 'No se pudieron obtener los dominios disponibles.' },
-        { status: 500 }
+        { error: 'Failed to get domains', message: `Error ${errStatus} al obtener dominios: ${errText.substring(0, 100)}` },
+        { status: 502 }
       )
     }
 
-    const domainsData = await domainsRes.json()
+    let domainsData
+    try {
+      domainsData = await domainsRes.json()
+    } catch (jsonErr: any) {
+      console.error('Domains JSON parse error:', jsonErr.message)
+      return NextResponse.json(
+        { error: 'Parse error', message: 'Error al procesar la respuesta de mail.tm' },
+        { status: 502 }
+      )
+    }
+
     const domains = Array.isArray(domainsData) ? domainsData : (domainsData['hydra:member'] || [])
     if (domains.length === 0) {
       return NextResponse.json(
         { error: 'No domains', message: 'No hay dominios disponibles para crear emails temporales.' },
-        { status: 500 }
+        { status: 503 }
       )
     }
 
@@ -46,14 +69,24 @@ export async function POST(request: NextRequest) {
     const address = `${username}@${domain}`
     const password = Math.random().toString(36).substring(2, 14) + 'A1!'
 
-    const createRes = await fetch('https://api.mail.tm/accounts', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json', 'Accept': 'application/json' },
-      body: JSON.stringify({ address, password }),
-    })
+    let createRes
+    try {
+      createRes = await fetch('https://api.mail.tm/accounts', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json', 'Accept': 'application/json' },
+        body: JSON.stringify({ address, password }),
+        signal: AbortSignal.timeout(10000),
+      })
+    } catch (createErr: any) {
+      console.error('Account create fetch error:', createErr.message)
+      return NextResponse.json(
+        { error: 'Account creation failed', message: `Error al crear cuenta: ${createErr.message}` },
+        { status: 503 }
+      )
+    }
 
     if (!createRes.ok) {
-      const errText = await createRes.text()
+      const errText = await createRes.text().catch(() => 'no body')
       console.error('Account creation failed:', createRes.status, errText)
       return NextResponse.json(
         { error: 'Failed to create email account', message: 'No se pudo crear la cuenta de email temporal. Inténtalo de nuevo.' },
@@ -64,17 +97,19 @@ export async function POST(request: NextRequest) {
     const account = await createRes.json()
 
     // Get auth token
-    const tokenRes = await fetch('https://api.mail.tm/token', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ address, password }),
-    })
-
     let token = null
-    if (tokenRes.ok) {
-      const tokenData = await tokenRes.json()
-      token = tokenData.token
-    }
+    try {
+      const tokenRes = await fetch('https://api.mail.tm/token', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ address, password }),
+        signal: AbortSignal.timeout(10000),
+      })
+      if (tokenRes.ok) {
+        const tokenData = await tokenRes.json()
+        token = tokenData.token
+      }
+    } catch {}
 
     await logUsage(sessionHash, 'generate_email')
 
@@ -92,10 +127,10 @@ export async function POST(request: NextRequest) {
         remaining: rateCheck.remaining - 1,
       },
     })
-  } catch (error) {
+  } catch (error: any) {
     console.error('Error generating email:', error)
     return NextResponse.json(
-      { error: 'Internal server error', message: 'Error interno del servidor.' },
+      { error: 'Internal server error', message: `Error interno: ${error.message || 'unknown'}` },
       { status: 500 }
     )
   }
