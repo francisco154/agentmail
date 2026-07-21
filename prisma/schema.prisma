@@ -1,0 +1,52 @@
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "sqlite"
+  url      = env("DATABASE_URL")
+}
+
+model EmailAccount {
+  id            String   @id @default(cuid())
+  emailAddress  String   @unique
+  password      String
+  mailTmId      String?  // mail.tm account ID
+  isActive      Boolean  @default(true)
+  expiresAt     DateTime
+  createdAt     DateTime @default(now())
+  lastCheckedAt DateTime?
+
+  messages EmailMessage[]
+}
+
+model EmailMessage {
+  id           String   @id @default(cuid())
+  accountId    String
+  mailTmMsgId  String?  // mail.tm message ID
+  fromAddress  String
+  fromName     String?
+  subject      String
+  bodyText     String?
+  bodyHtml     String?
+  isRead       Boolean  @default(false)
+  receivedAt   DateTime
+  createdAt    DateTime @default(now())
+
+  account EmailAccount @relation(fields: [accountId], references: [id], onDelete: Cascade)
+}
+
+model UsageLog {
+  id          String   @id @default(cuid())
+  sessionHash String   // hash of IP + user agent for anonymous tracking
+  action      String   // "generate_email", "check_inbox", "read_message", "delete_message"
+  timestamp   DateTime @default(now())
+}
+
+model GlobalStats {
+  id           String @id @default(cuid())
+  totalEmails  Int    @default(0)
+  totalMessages Int   @default(0)
+  periodStart  DateTime
+  updatedAt    DateTime @updatedAt
+}
